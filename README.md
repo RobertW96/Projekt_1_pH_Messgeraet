@@ -6,3 +6,7 @@ Das Projekt ist in 3 Arbeitspakete unterteilt:
     Automasierung der Messung
     Implementierung weiterer Features (Speichermodul, Temperatursensor, Echtzeituhr, ...); Steuerung über den PC/Laptop
     Autark steuerbares Messgerät mit Bedienmöglichkeit über das Touch Panel
+
+
+
+LINK zum Projekt 1: https://robertw96.github.io/Projekt_1_pH_Messgeraet/ 
