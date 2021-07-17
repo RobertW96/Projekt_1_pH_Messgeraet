@@ -1,0 +1,314 @@
+#include "Calibration.h"
+#include "Reset.h"
+#include "Menue_Kopf.h"
+#include <DS3231.h>
+#include "max6675.h"
+
+long long currentMillis = 0;
+long long previousMillis = 0;
+long long  currentMillis2 = 0;
+long long previousMillis2 = 0;
+float analogPhValueCurrent = 0;
+float voltagePhValue = 0;
+float slope = 0;
+float intercept = 0;
+int calibrNOK = 0;
+int val = 0;
+float pHValue = 0;
+char serialIncome = 0;
+
+DS3231  rtc(SDA, SCL);                               // Anschlüsse RTC
+
+int thermoDO = 5;                                    // Anschluss Temp.-Sensor
+int thermoCS = 6;                                        // Anschluss Temp.-Sensor
+int thermoCLK = 7;                                   // Anschluss Temp.-Sensor
+
+MAX6675 thermocouple(thermoCLK, thermoCS, thermoDO); // Anschluss Temp.-Sensor
+
+//***************************************************** PH-Wert MESSUNG V_1.0 ******************************************
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  rtc.begin();
+
+  Menue_Kopf();
+  Serial.println("\nDas Messinstrument wurde gestartet.");
+  Menue_Calibration();
+}
+
+
+void loop() {
+
+beginning:
+  unsigned int currentMillis = millis() / 1000;
+  unsigned int currentMillis2 = millis() / 1000;
+
+  set_Reset();
+
+
+
+  analogPhValueCurrent = analogRead(analogPinInput);                 // Auslesen des Analogwertes aus dem Sensor (0 - 1023)
+  voltagePhValue = analogPhValueCurrent / 1023.0 * 5000;                    // Umrechnen des Analogwertes in die Spannung
+
+  if (((previousMillis + 3) < currentMillis || previousMillis > currentMillis))  // Zeit zwischen den seriellen Ausgaben
+  {
+    // **************** Berechnung des pH-Wertes *************************
+    slope = (7.0 - 4.0) / (((calibrNeutralVoltage - 1500.0) / 3.0) - ((calibrAcidVoltage - 1500.0) / 3.0)); // two point: (_neutralVoltage,7.0),(_acidVoltage,4.0)
+    intercept =  7.0 - slope * ((calibrNeutralVoltage - 1500.0) / 3.0);
+    pHValue = slope * ((voltagePhValue - 1500.0) / 3.0) + intercept; //y = k*x + b
+
+    
+    Serial.print("\n\t\t   Datum: ");
+    Serial.print("\t");
+    Serial.print(rtc.getDOWStr());
+    Serial.print(" ");
+    Serial.print(rtc.getDateStr());
+    Serial.print("\n\t\t Uhrzeit: ");
+    Serial.print("\t");
+    Serial.print(rtc.getTimeStr());
+
+    Serial.print("\n\t\tSpannung:\t");
+    Serial.print(voltagePhValue, 2);
+    Serial.print(" mV");
+    Serial.print("\n\t      Temperatur: \t");
+    Serial.print(thermocouple.readCelsius());
+    Serial.print(" °C\n");
+    Serial.print("\t\t pH-Wert:\t");
+    Serial.print(pHValue);
+    Serial.print("\t \n");
+    Serial.print("\t   Messintervall: \t");
+    Serial.print(3000);
+    Serial.print(" ms\n");
+    Serial.print("\n---------------------------------------------\n");
+    Serial.print("\t\t");
+
+    previousMillis = currentMillis;
+  }
+
+
+
+  if ((previousMillis2 + 2000000) < currentMillis2)   // Zeit zwischen den seriellen Ausgaben
+  {
+    Serial.println("Die Laufzeit ist überschritten.");
+    Serial.println("Die Messeinheit wird nun neu kalibriert");
+    Menue_Calibration();                            // Kalibrierung
+    previousMillis2 = currentMillis2;
+  }
+
+
+  if (CalibrRequest == 1)
+  {
+    Serial.println("\n\n\nEs wurder der RESET Befehl eingeben.");
+    Serial.println("Daher wird autmatisch das Kalibrierungsmenü gestartet.\n");
+    Serial.println("--------------------------------------------");
+    CalibrRequest = 0;
+    Menue_Calibration();
+  }
+}
+
+//_________________________________________Calibration.h_______________________________________________
+
+#include <Arduino.h>
+
+int incomingValue = 0;
+int analogPinInput = A7;
+float analogPhValue = 0;
+float meassuredPH7 = 0;
+float meassuredPH4 = 0;
+float calibrNeutralVoltage = 1500.1;
+float calibrAcidVoltage = 2032.44;
+int loopCount = 0;
+
+
+
+void Menue_Calibration()
+{
+Calibration:
+
+  Serial.println("Zu Beginn kalibrieren Sie den pH-Sensor. Dazu leisten Sie den nachstehenden Anweisungen folge.");
+  Serial.println("Drücken Sie 1 um ohne Kalibrierung fortzufahren.");
+  Serial.println("Drücken Sie 2 um die Kalibrierung weiter fortzufahren.");
+  Serial.end();
+  Serial.begin(9600);
+
+  while (!Serial.available());
+  Serial.println("---------------------------------------------------------");
+  incomingValue = Serial.read();               // Die Zahl 1 oder 2 wird im ASCII Code übergeben
+
+  if (incomingValue == 49)                      // Entspricht 1 im ASCII Code
+  {
+    Serial.end();                           // Leeren der seriellen Schnitstelle
+    Serial.begin(9600);
+    Serial.println("Die pH-Wert Messung wird gestartet.");
+    goto mainLoop;
+  }
+  else if (incomingValue == 50)               // Entspricht 2 im ASCII Code
+  {
+    Serial.end();                           // Leeren der seriellen Schnitstelle
+    Serial.begin(9600);
+    Serial.println("");
+
+    Serial.println("Bitte tauchen Sie den pH-Sensor in die Flüssigkeit mit pH 7.00.");
+    Serial.println("Starten der ersten Referenzmessung durch Eingabe einer beliebigen Taste.");
+
+    while (!Serial.available());
+    for (loopCount = 0; loopCount <= 5; loopCount++)
+    {
+      Serial.println("\n~~~~~~~~~~~~~~~~~~~~~~~~~~Bitte warten Sie~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+      Serial.println("     Der pH-Sensor darf NICHT aus der Flüssigkeit genommen werden!");
+      delay(2000);
+    }
+    loopCount = 0;
+
+    analogPhValue = analogRead(analogPinInput);
+    meassuredPH7 = analogPhValue / 1023.0 * 5000;               // Gemessener analoger Wert (bei pH 7 Referenzflüssigkeit) in Volt
+    calibrNeutralVoltage = meassuredPH7;
+    Serial.print("\n    Gemessene Spannung:\t");
+    Serial.print(calibrNeutralVoltage);
+    Serial.println(" mV\n");
+    delay(2000);
+
+    if (calibrNeutralVoltage < 1700 && calibrNeutralVoltage > 1300) {
+      Serial.println("---------------------------------------------------------");
+      Serial.println("");
+      Serial.println("Die erste Referenzierung war erfolgreich!\n\n");
+      Serial.println("Bitte tauchen Sie den pH-Sensor in die Flüssigkeit mit pH 4.00.");
+      Serial.println("Starten der zweiten Referenzmessung durch Eingabe einer beliebigen Taste.");
+      Serial.println("");
+      Serial.end();                           // Leeren der seriellen Schnitstelle
+      Serial.begin(9600);
+
+
+      while (!Serial.available());
+
+      for (loopCount = 0; loopCount <= 5; loopCount++)
+      {
+        Serial.println("\n~~~~~~~~~~~~~~~~~~~~~~~~~~Bitte warten Sie~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+        Serial.println("     Der pH-Sensor darf NICHT aus der Flüssigkeit genommen werden!");
+        delay(1000);
+      }
+      loopCount = 0;
+      analogPhValue = analogRead(analogPinInput);
+      meassuredPH4 = analogPhValue / 1023.0 * 5000;           // Gemessener analoger Wert (bei pH 7 Referenzflüssigkeit) in Volt
+      calibrAcidVoltage = meassuredPH4;
+      Serial.print("\n    Gemessene Spannung:\t");
+      Serial.print(calibrAcidVoltage);
+      Serial.println(" mV\n");
+      delay(1000);
+      if (calibrAcidVoltage < 2400 && calibrAcidVoltage > 1900) {
+        Serial.println("---------------------------------------------------------");
+        Serial.println("");
+        Serial.println("Die Referenzierung der pH-Werte war erfolgreich!\n\n");
+        Serial.end();                           // Leeren der seriellen Schnitstelle
+        Serial.begin(9600);
+        goto mainLoop;
+      }
+
+      else {
+        Serial.println("\n\n############## FEHLER ################\n");
+        Serial.println("Die Messung ergab einen Wert weit entfernt von pH 4.0.");
+        Serial.println("Bitte überprüfen Sie die Anschlussleitungen und wiederholen sie die Kalibrierung.\n\n");
+        Serial.end();                           // Leeren der seriellen Schnitstelle
+        Serial.begin(9600);
+        goto Calibration;
+      }
+    }
+    else {
+      Serial.println("\n\n############## FEHLER ################\n");
+      Serial.println("Die Messung ergab einen Wert weit entfernt von pH 7.0.\n\n");
+      Serial.println("Bitte überprüfen Sie die Anschlussleitungen und wiederholen sie die Kalibrierung.\n\n");
+      Serial.end();                           // Leeren der seriellen Schnitstelle
+      Serial.begin(9600);
+      goto Calibration;
+    }
+  }
+  else
+  {
+    Serial.println("Zurück zum Anfang");
+    Serial.println(incomingValue);
+    Serial.end();                             // Leeren der seriellen Schnitstelle
+    Serial.begin(9600);
+    goto Calibration;                         // Sprung an das Ende der Funktion um in Hauptprogramm (void loop) zu springen
+  }
+
+mainLoop:
+  Serial.println("");
+}
+
+
+//_________________________________________Menue_Kopf.h_______________________________________________
+#include <Arduino.h>
+
+void Menue_Kopf()
+{
+  Serial.println("\n\n         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *************           TECHNOLOGIEZENTRUM            ***************");
+  Serial.println("         *************          Ruhstorf an der Rott           ***************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *************             pH-Wert Messung             ***************");
+  Serial.println("         *************          mit Kalibrierungsmodus         ***************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         ******************************************************(c)Robert Weber");
+}
+
+//
+//___________________________________________Reset.h_________________________________________________
+
+#include <Arduino.h>
+
+boolean newData = false;
+char data[80];
+int incount = 0 ;
+float currentMillis3 = 0;
+float previousMillis3 = 0;
+int CalibrRequest = 0;
+
+
+void set_Reset() {
+  currentMillis3 = millis();
+
+  if (Serial.available() > 0) {
+    data[incount] = Serial.read();
+
+    newData = 1;
+    incount++;
+    previousMillis3 = currentMillis3;
+  }
+
+  if (newData == 1 && (incount == 5 && data[0] == 'R' && data[1] == 'e' && data[2] == 's' && data[3] == 'e' && data[4] == 't')) {
+    Serial.end();
+    Serial.begin(9600);
+
+    CalibrRequest = 1;
+    incount = 0;
+    newData = 0;
+  }
+  if (newData == 1 && ((previousMillis3 + 10) < currentMillis3))
+  {
+    Serial.end();
+    Serial.begin(9600);
+    incount = 0;
+    newData = 0;
+    previousMillis3 = 1000;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

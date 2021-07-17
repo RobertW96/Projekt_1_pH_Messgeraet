@@ -1,0 +1,479 @@
+
+#include "HMI.h"
+#include "SD_save.h"
+
+
+int analogPhValueCurrent = 0;
+//int analogPinInput = A1;
+float slope = 0;
+float intercept = 0;
+
+
+void setup() {
+  Serial.begin(9600);
+//  nextion.begin(9600);
+  rtc.begin();
+
+}
+
+void loop() {
+  currentMillis = millis() / 1000;				// Teiler der Zeit seit Start des MCB
+  HMI();										// Aufruf Unterprogramm HMI.h
+  SD_save();									// Aufruf Unterproramm SD_save.h
+
+
+
+  analogPhValueCurrent = analogRead(analogPinInput);                        // Auslesen des Analogwertes aus dem Sensor (0 - 1023)
+  voltagePhValue = analogPhValueCurrent / 1023.0 * 5000;                    // Umrechnen des Analogwertes in die Spannung
+
+
+  // **************** Berechnung des pH-Wertes *************************
+  slope = (7.0 - 4.0) / (((calibrNeutralVoltage - 1500.0) / 3.0) - ((calibrAcidVoltage - 1500.0) / 3.0)); // two point: (_neutralVoltage,7.0),(_acidVoltage,4.0)
+  intercept =  7.0 - slope * ((calibrNeutralVoltage - 1500.0) / 3.0);
+  pHValue = slope * ((voltagePhValue - 1500.0) / 3.0) + intercept; //y = k*x + b
+
+
+}
+
+
+//_________________________________HMI.h_____________________________________
+
+
+#include <Arduino.h>
+
+#include <SPI.h>                // Bibliothek SPI Verbindung (SD-Karte)
+#include <SD.h>                 // Bibliothek SD-Karte
+#include <SoftwareSerial.h>
+#include "max6675.h"
+int thermoDO = 7;
+int thermoCS = 8;
+int thermoCLK = 9;
+
+MAX6675 thermocouple(thermoCLK, thermoCS, thermoDO);
+#include <EEPROM.h>
+File myFile;
+
+#include <DS3231.h>
+DS3231  rtc(SDA, SCL);
+
+SoftwareSerial nextion(2, 3);
+
+String current_value = "";
+String daten_display = "";
+char zwischenspeicher;
+String timebtwvalues = "";
+
+
+int i = 0;								//Variablen die Dauerschleife verhindern
+int u = 0;								//Variablen die Dauerschleife verhindern
+int v = 0;								//Variablen die Dauerschleife verhindern
+
+
+bool shift = false;
+bool caps = false;
+
+String Buchstabe = "";
+float pHValue = 0;
+float voltagePhValue;
+int save = 0;
+int timebtwvalue = 0;
+int timebtwvalue2 = 3;           		// Standardmäßige 3 Sekunden, falls keine Zeiteingabe getätigt wurde
+int analogPinInput = A1;
+
+
+int addr = 1;
+int valSave;
+
+
+float calibrNeutralVoltage = 1500.1;	// Defaultwerte für Referenzlösung pH 7.0
+float calibrAcidVoltage = 2442.35;		// Defaultwerte für Referenzlösung pH 4.0
+int currentMillis = 0;					// Zeitvariablen
+int previousMillis = 0;					// Zeitvariablen
+int previousMillis3 = 0;				// Zeitvariablen
+int previousMillis4 = 0;				// Zeitvariablen
+bool Save_activ = false;				
+
+
+void HMI() {
+  
+  
+  if (nextion.available() > 0 )			// Einlesen der Daten aus seriellen Monitor
+  {
+    zwischenspeicher = char(nextion.read());
+
+
+    if ((zwischenspeicher >= 'a' && zwischenspeicher <= 'z') || (zwischenspeicher >= '0' && zwischenspeicher <= '9') || zwischenspeicher == '!' || zwischenspeicher == '(' || zwischenspeicher == ')' || zwischenspeicher == '&' || (zwischenspeicher >= 'A' && zwischenspeicher <= 'Z') || zwischenspeicher == '*')
+    {
+      current_value += zwischenspeicher;
+      Serial.println(zwischenspeicher);
+      nextion.end();
+      nextion.begin(9600);
+
+    }
+  }
+  else if (current_value == ")")
+  {
+    daten_display = daten_display.substring(0, daten_display.length() - 1);
+    current_value = "";
+    Serial.println("Die Ausgabe plus  " + daten_display);
+    nextion.print("t100.txt=\"" + daten_display + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    shift = false;
+  }
+  else if (current_value >= "0" && current_value <= "9")	// Für Eingabe zw. 0-9 (virtuelle Tastatur)
+  {
+    while (u < current_value[0])
+    {
+      u++;
+    }
+    daten_display = daten_display +  char(u);
+    Serial.println("Die Ausgabe plus  " + daten_display);
+    nextion.print("t100.txt=\"" + daten_display + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    u = 0;
+    shift = false;
+    current_value = "";
+  }
+
+  else if ((current_value >= "a" && current_value <= "z") && (shift == false && caps == false))
+  {													// Für Eingabe zw. a-z (virtuelle Tastatur)
+    daten_display += current_value;
+    current_value = "";
+    shift = false;
+    Serial.println("Die Ausgabe plus  " + daten_display);
+    nextion.print("t100.txt=\"" + daten_display + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+  }
+  else if ((current_value >= "a" && current_value <= "z") && (shift == true || caps == true))
+  {													// Für Eingabe zw. A-Z (virtuelle Tastatur)
+    char Buchstabe = char(current_value[0]) + ('A' - 'a');
+    daten_display = daten_display + String(Buchstabe);
+    current_value = "";
+    Serial.println("Die Ausgabe plus  " + (daten_display));
+    nextion.print("t100.txt=\"" + (daten_display) + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    v = 0;
+    shift = false;
+  }
+
+
+
+  else if (current_value >= "A" && current_value <= "T")	// Sonderfunktionen
+  {
+    while ( i < current_value[0] )
+    {
+      i ++;
+    }
+    int number = i - 64;
+    timebtwvalue2 = number;
+    i = 0;
+    current_value = "";
+
+    Serial.println(timebtwvalue);
+    if (number > 1)
+    {
+      nextion.print("t24.txt=\"" + String(number) + " Sekunden\"");
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.print("t25.txt=\"" + String(number) + " Sekunden\"");
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.write(0xff);
+      timebtwvalues = String(number) + String(" Sekunden");
+      shift = false;
+    }
+    else
+    {
+      nextion.print("t24.txt=\"1 Sekunde\"");
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.print("t25.txt=\"1 Sekunde\"");
+      nextion.write(0xff);
+      nextion.write(0xff);
+      nextion.write(0xff);
+      timebtwvalues = String("1 Sekunde");
+      current_value = "";
+    }
+  }
+  else if (current_value == "U")				// Sonderfunktionen
+  {
+    if (shift == false)
+    {
+      shift = true;
+      current_value = "";
+      Serial.println("Shift1");
+    }
+  }
+  else if (current_value == "V")				// Sonderfunktionen
+  {
+    current_value = "";
+    if (save == 0 && SD.begin())
+    {
+      save = 1;
+      Serial.println("Save aktiv");
+      valSave = EEPROM.read(addr);
+      delay(200);
+      valSave++;
+      EEPROM.write(addr, valSave);
+      myFile = SD.open("Aufz" + String(valSave) + ".txt", FILE_WRITE);
+      delay(200);
+      myFile.print("\n\n\n\t  Kennzeichnung:\t");
+      myFile.println(daten_display);
+      myFile.println("\n\n\n");
+      myFile.println("  Datum      Uhrzeit    Spannung   pH    Temp.");
+    }
+  }
+  else if (current_value == "Y")				// Sonderfunktionen
+  {
+    Serial.println("ich kom hier erein");
+    if (save == 1)
+    {
+      save = 0;
+      Save_activ = false;
+      myFile.close();
+      Serial.println("Save beendet");
+    }
+    save = 0;
+    current_value = "";
+  }
+  if (current_value == "W")						// Sonderfunktionen
+  {
+    calibrNeutralVoltage = 1500.1;
+    nextion.print("t40.txt=\"");
+    nextion.print(calibrNeutralVoltage, 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    current_value = "";
+    daten_display = "";
+
+  }
+
+  if (current_value == "X")						// Sonderfunktionen
+  {
+    calibrAcidVoltage = 4242.35;
+    nextion.print("t41.txt=\"");
+    nextion.print(calibrAcidVoltage, 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    current_value = "";
+    daten_display = "";
+  }
+
+  else if (current_value == "*")				// Sonderfunktionen
+  {
+    if (caps == false)
+    {
+      caps = true;
+      current_value = "";
+      Serial.println("Caps1");
+    }
+    else
+    {
+      caps = false;
+      current_value = "";
+      Serial.println("Caps0");
+    }
+  }
+  else if (current_value == "(")				// Sonderfunktionen
+  {
+    current_value = "";
+    daten_display = "";
+    shift = false;
+  }
+  if (current_value == "!")						// Sonderfunktionen
+  {
+    Serial.println("Kali7");
+    current_value = "";
+    calibrNeutralVoltage = voltagePhValue;
+    nextion.print("t40.txt=\"");
+    nextion.print(calibrNeutralVoltage, 1);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+  }
+  else if (current_value == "&")
+  {
+    Serial.println("Kali4");
+    current_value = "";
+    calibrAcidVoltage = voltagePhValue;
+    nextion.print("t41.txt=\"");
+    nextion.print(calibrAcidVoltage, 1);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+  }
+
+  if ((previousMillis + 1.5) < currentMillis)	//Aktualisierung der Werte auf dem Touch Panel
+  {
+    nextion.end();
+    nextion.begin(9600);
+
+
+    previousMillis = currentMillis;
+
+
+    nextion.print("t4.txt=\"");
+    nextion.print(pHValue, 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    nextion.print("t5.txt=\"");
+    nextion.print(voltagePhValue, 1);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    nextion.print("t6.txt=\"");
+    nextion.print(thermocouple.readCelsius(), 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    /*nextion.print("t7.txt=\"");
+    nextion.print(rtc.getDateStr());
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+
+  }
+
+
+  if ((previousMillis3 + 1.5) < currentMillis)
+  {
+    nextion.end();
+    nextion.begin(9600);
+    previousMillis3 = currentMillis;
+    Serial.println("Test1");
+    nextion.print("t40.txt=\"");
+    nextion.print(calibrNeutralVoltage, 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    nextion.print("t41.txt=\"");
+    nextion.print(calibrAcidVoltage, 2);
+    nextion.print("\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    nextion.print("t25.txt=\"" + timebtwvalues + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+    nextion.print("t24.txt=\"" + timebtwvalues + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+
+    Serial.println("Test");
+    Serial.println(analogRead(analogPinInput));
+
+    nextion.print("t20.txt=\"" + daten_display + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.print("t100.txt=\"" + daten_display + "\"");
+    nextion.write(0xff);
+    nextion.write(0xff);
+    nextion.write(0xff);
+
+      if (Save_activ == true)
+      {
+       nextion.print("t26.txt=\"Ja\"");
+       nextion.write(0xff);
+       nextion.write(0xff);
+       nextion.write(0xff);
+      }
+      else if (Save_activ == false)
+      {
+       nextion.print("t26.txt=\"Nein\"");
+       nextion.write(0xff);
+       nextion.write(0xff);
+       nextion.write(0xff);
+      }
+  }
+}
+ if ((previousMillis4 + 3) < currentMillis)			// Aktualisierung der Werte auf dem Touch Panel
+  {
+  Serial.println("TestSerial4");
+  previousMillis4 = currentMillis;
+  if (SD.begin(10))
+  {
+  nextion.print("t21.txt=\"Ja\"");
+  nextion.write(0xff);
+  nextion.write(0xff);
+  nextion.write(0xff);
+  }
+  else
+  {
+  nextion.print("t21.txt=\"Nein\"");
+  nextion.write(0xff);
+  nextion.write(0xff);
+  nextion.write(0xff);
+  }
+  }
+
+//_________________________________SD_save.h_____________________________________
+
+
+#include <Arduino.h>
+
+//File myFile;
+#include <EEPROM.h>
+
+
+int previousMillis2 = 0;
+
+
+void SD_save()
+{
+
+  if ((save == 1) && SD.begin() && (previousMillis2 + (timebtwvalue2-1) < currentMillis))
+  {														// Konfiguration des Formates zum Speichern
+    previousMillis2 = currentMillis;
+    Serial.println("Speichermodus an-------------------");
+    Save_activ = true;
+    if (myFile) {
+      Serial.println("Die SD-Karte darf während der Aufzeichnung NICHT entfernt werden.");
+      Serial.println("         Zum Beenden der Aufzeichnung 'Stop' eingeben!");
+      myFile.print(rtc.getDateStr());                  // Speichern des Wochentages auf die SD-Karte
+      myFile.print(" , ");
+      myFile.print(rtc.getTimeStr());                  // Speichern des Datums auf die SD-Karte
+      myFile.print(" , ");
+      myFile.print(voltagePhValue);                    // Speichern der Spannung des pH-Wertes auf die SD-Karte
+      myFile.print(" , ");
+      myFile.print(pHValue);                           // Speichern des pH-Wertes auf die SD-Karte
+      myFile.print(" , ");
+      myFile.println(thermocouple.readCelsius());      // Speichern der Temperatur auf die SD-Karte
+    }
+  }
+
+}

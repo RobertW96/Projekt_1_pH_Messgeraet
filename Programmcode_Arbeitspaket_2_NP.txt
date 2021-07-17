@@ -1,0 +1,602 @@
+// Eingebundene Bibliotheken
+
+#include "Calibration.h"
+#include "Reset.h"
+#include "Menue_Kopf.h"
+#include "SD_Card.h"
+
+#include <DS3231.h>
+
+#include "max6675.h"
+
+#include <SPI.h>
+#include <SD.h>
+
+
+long long currentMillis = 0;
+long long previousMillis = 0;
+long long  currentMillis2 = 0;
+long long previousMillis2 = 0;
+float analogPhValueCurrent = 0;
+float voltagePhValue = 0;
+float slope = 0;
+float intercept = 0;
+int calibrNOK = 0;
+int val = 0;
+float pHValue = 0;
+char serialIncome = 0;
+
+
+DS3231  rtc(SDA, SCL);                               // Anschlüsse RTC
+
+int thermoDO = 5;                                     // Anschluss Temp.-Sensor
+int thermoCS = 6;                                     // Anschluss Temp.-Sensor
+int thermoCLK = 7;                                    // Anschluss Temp.-Sensor
+
+MAX6675 thermocouple(thermoCLK, thermoCS, thermoDO);  // Anschluss Temp.-Sensor
+
+
+
+void setup() {
+
+  Serial.begin(9600);                     // Serial Monitor starten
+
+  rtc.begin();                            // Temp.-Sensor starten
+
+  Menue_Kopf();
+
+  Serial.println("\nDas Messinstrument wurde gestartet.\n");
+
+  Card_ok();
+
+  Menue_Calibration();
+}
+
+
+void loop() {
+
+beginning:
+  unsigned int currentMillis = millis() / 1000;
+  unsigned int currentMillis2 = millis() / 1000;
+
+  if (ask_Author == 0)
+  {
+    Input_Author();
+  }
+
+  if (SaveRequest == 1)
+  {
+    Name_txt();
+  }
+
+  set_Reset();
+
+  analogPhValueCurrent = analogRead(analogPinInput);                 // Auslesen des Analogwertes aus dem Sensor (0 - 1023)
+  voltagePhValue = analogPhValueCurrent / 1023.0 * 5000;             // Umrechnen des Analogwertes in die Spannung
+
+  if (((previousMillis + (timeBtwValues)) < currentMillis || previousMillis > currentMillis) && ask_Author == 1 && SaveRequest == 0)  // Zeit zwischen den seriellen Ausgaben
+  {
+    // **************** Berechnung des pH-Wertes *************************
+    slope = (7.0 - 4.0) / (((calibrNeutralVoltage - 1500.0) / 3.0) - ((calibrAcidVoltage - 1500.0) / 3.0)); // two point: (_calibrNeutralVoltage,7.0),(_calibrAcidVoltage,4.0)
+    intercept =  7.0 - slope * ((calibrNeutralVoltage - 1500.0) / 3.0);
+    pHValue = slope * ((voltagePhValue - 1500.0) / 3.0) + intercept; //y = k*x + b
+
+    // Inhalte für seriellen Monitor
+    Serial.print("\n\t\t   Datum: ");
+    Serial.print("\t");
+    Serial.print(rtc.getDOWStr());
+    Serial.print(" ");
+    Serial.print(rtc.getDateStr());
+    Serial.print("\n\t\t Uhrzeit: ");
+    Serial.print("\t");
+    Serial.print(rtc.getTimeStr());
+
+    // Inhalte für Speichermodus
+    Serial.print("\n\t\tSpannung:\t");
+    Serial.print(voltagePhValue, 2);
+    Serial.print(" mV");
+    Serial.print("\n\t      Temperatur: \t");
+    Serial.print(thermocouple.readCelsius());
+    Serial.print(" °C\n");
+    Serial.print("\t\t pH-Wert:\t");
+    Serial.print(pHValue);
+    Serial.print("\t \n");
+    Serial.print("\t   Messintervall: \t");
+    Serial.print(timeBtwValues + 1);
+    Serial.print(" s\n");
+    Serial.print("\n---------------------------------------------\n");
+    Serial.print("\t\t");
+
+    if (unlock_saving == 1)
+    {
+      Serial.println("Aufzeichnung läuft...");
+      Serial.println("Die SD-Karte darf während der Aufzeichnung NICHT entfernt werden.");
+      Serial.println("         Zum Beenden der Aufzeichnung 'Stop' eingeben!");
+      myFile.print(rtc.getDateStr());
+      myFile.print(" , ");
+      myFile.print(rtc.getTimeStr());
+      myFile.print(" , ");
+      myFile.print(voltagePhValue);
+      myFile.print(" , ");
+      myFile.print(pHValue);
+      myFile.print(" , ");
+      myFile.println(thermocouple.readCelsius());
+    }
+    previousMillis = currentMillis;
+  }
+
+  if ((previousMillis2 + 200000) < currentMillis2)   // Zeit zwischen den seriellen Ausgaben
+  {
+    Serial.println("Die Laufzeit ist überschritten.");
+    Serial.println("Die Messeinheit wird nun neu kalibriert");
+    Menue_Calibration();                            // Kalibrierung
+    previousMillis2 = currentMillis2;
+  }
+
+
+  if (CalibrRequest == 1)
+  {
+    Serial.println("\n\n\nEs wurde der RESET Befehl eingeben.");
+    if (unlock_saving == 1)
+    {
+      Serial.println("\n################ Die Aufzeichnung wurde gestoppt. ################\n");
+      //Stop_tracking();
+      incount = 0;
+      newData = 0;
+      unlock_saving = 0;
+      myFile.close();
+    }
+    Serial.println("Daher wird autmatisch das Kalibrierungsmenü gestartet.\n");
+    Card_ok();
+    Serial.println("--------------------------------------------");
+    CalibrRequest = 0;
+    Menue_Calibration();
+  }
+}
+
+
+//_________________________________Calibration.h_____________________________________
+
+
+// Eingebundene Bibliotheken
+
+#include <Arduino.h>
+#include "Input_Author.h"
+
+int incomingValue = 0;
+int analogPinInput = A7;
+float analogPhValue = 0;
+float meassuredPH7 = 0;
+float meassuredPH4 = 0;
+float calibrNeutralVoltage = 1500.1;
+float calibrAcidVoltage = 2032.44;
+int loopCount = 0;
+
+
+void Menue_Calibration()
+{
+Calibration:
+
+  Serial.println("Zu Beginn kalibrieren Sie den pH-Sensor. Dazu leisten Sie den nachstehenden Anweisungen folge.");
+  Serial.println("Drücken Sie 1 um ohne Kalibrierung fortzufahren.");
+  Serial.println("Drücken Sie 2 um die Kalibrierung weiter fortzufahren.");
+  Serial.end();
+  Serial.begin(9600);
+
+  while (!Serial.available());
+  Serial.println("---------------------------------------------------------");
+  incomingValue = Serial.read();               // Die Zahl 1 oder 2 wird im ASCII Code übergeben
+
+  if (incomingValue == 49)                     // Entspricht 1 im ASCII Code
+  {
+    Serial.end();                              // Leert den Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    Serial.println("Die pH-Wert Messung wird gestartet.");
+    goto mainLoop;
+  }
+  else if (incomingValue == 50)               // Entspricht 2 im ASCII Code
+  {
+    Serial.end();                             // Leert den Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    Serial.println("");
+    Serial.println("Bitte tauchen Sie den pH-Sensor in die Flüssigkeit mit pH 7.00.");
+    Serial.println("Starten der ersten Referenzmessung durch Eingabe einer beliebigen Taste.");
+
+    while (!Serial.available());
+    for (loopCount = 0; loopCount <= 5; loopCount++)
+    {
+      Serial.println("\n~~~~~~~~~~~~~~~~~~~~~~~~~~Bitte warten Sie~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+      Serial.println("     Der pH-Sensor darf NICHT aus der Flüssigkeit genommen werden!");
+      delay(2000);
+    }
+    loopCount = 0;
+
+    analogPhValue = analogRead(analogPinInput);
+    meassuredPH7 = analogPhValue / 1023.0 * 5000;          // Gemessener analoger Wert (bei pH 7 Referenzflüssigkeit) in Volt
+    calibrNeutralVoltage = meassuredPH7;
+    Serial.print("\n    Gemessene Spannung:\t");
+    Serial.print(calibrNeutralVoltage);
+    Serial.println(" mV\n");
+    delay(2000);
+
+    if (calibrNeutralVoltage < 1700 && calibrNeutralVoltage > 1300) {
+      Serial.println("---------------------------------------------------------");
+      Serial.println("");
+      Serial.println("Die erste Referenzierung war erfolgreich!\n\n");
+      Serial.println("Bitte tauchen Sie den pH-Sensor in die Flüssigkeit mit pH 4.00.");
+      Serial.println("Starten der zweiten Referenzmessung durch Eingabe einer beliebigen Taste.");
+      Serial.println("");
+      Serial.end();                                      // Leert den Inhalt des seriellen Monitors
+      Serial.begin(9600);
+
+      while (!Serial.available());
+
+      for (loopCount = 0; loopCount <= 5; loopCount++)
+      {
+        Serial.println("\n~~~~~~~~~~~~~~~~~~~~~~~~~~Bitte warten Sie~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+        Serial.println("     Der pH-Sensor darf NICHT aus der Flüssigkeit genommen werden!");
+        delay(1000);
+      }
+      loopCount = 0;
+
+      analogPhValue = analogRead(analogPinInput);
+      meassuredPH4 = analogPhValue / 1023.0 * 5000;         // Gemessener analoger Wert (bei pH 7 Referenzflüssigkeit) in Volt
+      calibrAcidVoltage = meassuredPH4;
+      Serial.print("\n    Gemessene Spannung:\t");
+      Serial.print(calibrAcidVoltage);
+      Serial.println(" mV\n");
+      delay(1000);
+      if (calibrAcidVoltage < 2400 && calibrAcidVoltage > 1900) {
+        Serial.println("---------------------------------------------------------");
+        Serial.println("");
+        Serial.println("Die Referenzierung der pH-Werte war erfolgreich!\n\n");
+        Serial.end();                                      // Leert den Inhalt des seriellen Monitors
+        Serial.begin(9600);
+        goto mainLoop;
+      }
+      else {
+        Serial.println("\n\n############## FEHLER ################\n");
+        Serial.println("Die Messung ergab einen Wert weit entfernt von pH 4.0.");
+        Serial.println("Bitte überprüfen Sie die Anschlussleitungen und wiederholen sie die Kalibrierung.\n\n");
+        calibrNeutralVoltage = 1500.1;          // Optimalwert im Falle eines Fehleres
+        calibrAcidVoltage = 2032.44;            // Optimalwert im Falle eines Fehleres
+        Serial.end();                           // Leert den Inhalt des seriellen Monitors
+        Serial.begin(9600);
+        goto Calibration;
+      }
+    }
+    else {
+      Serial.println("\n\n############## FEHLER ################\n");
+      Serial.println("Die Messung ergab einen Wert weit entfernt von pH 7.0.\n\n");
+      Serial.println("Bitte überprüfen Sie die Anschlussleitungen und wiederholen sie die Kalibrierung.\n\n");
+      calibrNeutralVoltage = 1500.1;          // Optimalwert im Falle eines Fehleres
+      calibrAcidVoltage = 2032.44;            // Optimalwert im Falle eines Fehleres
+      Serial.end();                           // Leert den Inhalt des seriellen Monitors
+      Serial.begin(9600);
+      goto Calibration;
+    }
+  }
+  else
+  {
+    //Serial.println("Zurück zum Anfang");
+    //Serial.println(incomingValue);
+    Serial.end();                           // Leert den Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    goto Calibration;                         // Sprung an das Ende der Funktion um in in Hauptprogramm (void loop) zu springen
+  }
+
+mainLoop:
+  Serial.println("");
+}
+
+
+//_________________________________Input_Author.h_____________________________________
+
+
+// Eingebundene Bibliotheken
+
+#include <Arduino.h>
+
+String inputString = "";
+bool stringComplete = false;
+int ask_Author = 0;
+long timeBtwValues = 2000;
+char inChar;
+int while_counter = 0;
+int lock = 0;
+
+
+void Input_Author() {
+
+start:
+  if (lock == 0)                     // Verhindert mehrmaliges Ausführung
+  {
+    Serial.println("Bitte geben Sie die gewünschte Zeit zwischen den Messungen (in Sekunden & max. 10?) ein: ");
+    lock = 1;
+  }
+  while (!Serial.available());      // Wartet auf Eingabe im seriellen Monitor
+  while (Serial.available())
+  {
+    char inChar = (char)Serial.read();
+    inputString += inChar;
+
+    if (inChar == '\n')             // Eingabe beendet wenn '\n' eingeht
+    {
+      stringComplete = true;
+    }
+  }
+
+  if (stringComplete == true)
+  {
+
+    for (while_counter = 0; while_counter < ((inputString.length() - 1)); while_counter++)
+    {
+      if ((inputString[while_counter] >= '0') && (inputString[while_counter] <= '9') && (inputString.length() - 1) < 9)
+      {
+      }
+
+      else                                  // Wenn keine Zahlen eingegeben wurden
+      {
+        Serial.println("\n\n\t#############  Error  #############");
+        Serial.println("\t\tFehlerhafte Eingabe\n");
+        Serial.println("Bitte geben Sie nur Zahlenwerte zwischen 0 - 10? ein.");
+        Serial.end();                      // Leeren des Inhalts des seriellen Monitors
+        Serial.begin(9600);
+        stringComplete = false;            // Rücksetzen der Variablen
+        inputString = "";
+        lock = 0;
+        goto start;
+      }
+    }
+  }
+  if (stringComplete)               // Umwandlung und Ausgabe der eingegebenen Zeit
+  {
+    timeBtwValues = inputString.toInt();
+    timeBtwValues = timeBtwValues - 1;
+    Serial.print("\n\tEingegebene Zeit (in ms): ");
+    Serial.print(inputString);
+    Serial.print("\n\n");
+    inputString = "";
+    stringComplete = false;
+    ask_Author = 1;
+    lock = 0;
+  }
+}
+
+
+//_________________________________Menue_Kopf.h_____________________________________
+
+
+// Eingebundene Bibliothek
+
+#include <Arduino.h>
+
+void Menue_Kopf()
+{
+  Serial.println("\n\n         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *************           TECHNOLOGIEZENTRUM            ***************");
+  Serial.println("         *************          Ruhstorf an der Rott           ***************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *************             pH-Wert Messung             ***************");
+  Serial.println("         *************          mit Kalibrierungsmodus         ***************");
+  Serial.println("         *************                                         ***************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         *********************************************************************");
+  Serial.println("         ******************************************************(c)Robert Weber");
+}
+
+
+//_________________________________Reset.h_____________________________________
+
+
+// Eingebundene Bibliotheken
+
+#include <Arduino.h>
+#include <SD.h>
+#include <SPI.h>
+
+boolean newData = false;
+char data[80];
+int incount = 0 ;
+float currentMillis3 = 0;
+float previousMillis3 = 0;
+int CalibrRequest = 0;
+int SaveRequest = 0;
+int Save_wait = 0;
+int unlock_saving = 0 ;
+
+File myFile;
+
+void set_Reset() {
+  inputString.reserve(200);
+  currentMillis3 = millis();
+
+  if (Serial.available() > 0) {               //Füllt Variable wenn Eingabe erfolgt
+    data[incount] = Serial.read();
+
+    newData = 1;
+    incount++;
+    previousMillis3 = currentMillis3;
+
+  }
+
+  if (newData == 1 && (incount == 5 && data[0] == 'R' && data[1] == 'e' && data[2] == 's' && data[3] == 'e' && data[4] == 't'))
+  { // Wenn Variable 'Reset' ergibt
+    Serial.end();                       // Leert Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    CalibrRequest = 1;
+    incount = 0;
+    newData = 0;
+    ask_Author = 0;
+
+  }
+  else if (newData == 1 && (incount == 4 && data[0] == 'S' && data[1] == 'a' && data[2] == 'v' && data[3] == 'e') && unlock_saving == 0)
+  { // Wenn Variable 'Save' ergibt
+    Serial.end();                       // Leert Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    SaveRequest = 1;
+    incount = 0;
+    newData = 0;
+
+  }
+  else if ((newData == 1 && (incount == 4 && data[0] == 'S' && data[1] == 't' && data[2] == 'o' && data[3] == 'p') && unlock_saving == 1))
+  { // Wenn Variable 'Stop' ergibt
+
+    Serial.println("\n################ Die Aufzeichnung wurde gestoppt. ################");
+    incount = 0;
+    newData = 0;
+    unlock_saving = 0;
+    myFile.close();                    // Schließt gespeichert Datei auf SD-Karte
+    Serial.end();                      // Leert Inhalt des seriellen Monitors
+    Serial.begin(9600);
+  }
+
+
+  if (newData == 1 && ((previousMillis3 + 10) < currentMillis3))
+  { // Wenn kein Keyword erkannt wurde
+    Serial.end();                     // Leert Inhalt des seriellen Monitors
+    Serial.begin(9600);
+    incount = 0;
+    newData = 0;
+    previousMillis3 = 1000;
+  }
+}
+
+
+//_________________________________SD_Card.h_____________________________________
+
+
+// Eingebundene Bibliotheken
+
+#include <Arduino.h>
+#include <EEPROM.h>
+
+int addr = 1;
+int valSave;
+int SD_OK = 0;
+
+
+int wait_count = 0;
+String inputString2 = "";
+int stringComplete2 = 0;
+char inChar2;
+char variable;
+String Filename;
+int lock1 = 0;
+int firsttime = 0;
+
+
+void Card_ok()
+{
+  while (!Serial)
+
+    Serial.print("Suche SD Karte...");
+  for (wait_count = 0; wait_count <= 8; wait_count++)
+  {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.print("\n");
+  if (!SD.begin(53)) {                  // Prüft ob SD-Karte gesteckt ist
+    Serial.println("Die SD Karte wurde nicht gefunden!\n");
+
+
+  }
+  else {                                // Wenn SD-Karte gesteckt
+
+    Serial.println("Die SD Karte wurde erkannt.\n");
+    SD_OK = 1;
+
+  }
+}
+
+
+
+void Name_txt ()
+{
+  Card_ok();
+
+  if (SD_OK == 1)                        // Voraussetzung: SD-Karte gesteckt
+  {
+new_try:
+
+    valSave = EEPROM.read(addr);         // Laufvariable für Dateinamen in EEPROM gespeichert
+    delay(200);
+    valSave++;
+    if (valSave == 255)                  // Speichergröße auf EEPROM ist 1 Byte (0-255)
+    {
+      valSave = 0;
+    }
+
+    Serial.println("\n\nEs wurde der Speicher Modus aktiviert.");
+    Serial.print("Es wird eine Textdatei mit dem Dateinamen Aufz");
+    Serial.print(String(valSave));
+    Serial.println(" erstellt.");
+    EEPROM.write(addr, valSave);
+    delay(200);
+
+    while (!myFile)
+    {
+      myFile = SD.open("Aufz" + String(valSave) + ".txt", FILE_WRITE);  // Dateiname
+      delay(200);
+    }
+
+    if (myFile)                                 // Wenn Bedinung erfüllt wurde Datei erfolgreich erstellt
+    {
+      unlock_saving = 1;
+      Serial.println("\n\n\t\t###########  ERFOLGREICH  ###########\n\n");
+      Serial.println("Bitte geben Sie den Bediener und das dazugehöre Kürzel der Batterie ein.");
+      Serial.println("Erlaubt sind dabei nur Buchstaben (groß und klein), Zahlen und der Unterstrich!");
+
+      Serial.end();                             // Leert Inhalt des seriellen Monitors
+      Serial.begin(9600);
+
+      while (!Serial.available());
+      while (Serial.available() || stringComplete2 == false)
+      {
+        char inChar2 = (char)Serial.read();
+
+        if (inChar2 >= '!' && inChar2 <= 'z')   // Begrenzt die erlaubten Eingaben für das Batteriekürzel
+        {
+          inputString2 += inChar2;
+        }
+        if (inChar2 == '\n')
+        {
+          stringComplete2 = true;
+        }
+      }
+      Serial.println("\nIhr eingegebenes Kürzel lautet: " + inputString2);
+    }
+
+    if (stringComplete2)                        // Schreiben der Eingabe in Datei
+    {
+      myFile.print("\n\n\n\t  Kennzeichnung:\t");
+      myFile.println(inputString2);
+      myFile.println("\n\n\n");
+      myFile.println("  Datum      Uhrzeit    Spannung   pH    Temp."); // Spaltenkopf in der Datei
+
+      inputString2 = "";
+      stringComplete2 = false;
+    }
+    SaveRequest = 0;
+    SD_OK = 0;
+  }
+
+  else
+  {
+    Serial.println("###############   KEINE SD-KARTE GEFUNDEN!   ##############");
+    Serial.println("Bitte stecken Sie eine SD-Karte ein und geben Sie erneut 'Save' ");
+    Serial.println("im seriellen Monitor ein!");
+    SaveRequest = 0;
+    delay(4000);
+  }
+}
+
+
+void Stop_tracking()                    // Schließt Datei nach Eingabe von 'Stop'
+{
+  myFile.close();
+}
