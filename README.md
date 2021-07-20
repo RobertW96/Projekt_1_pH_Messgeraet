@@ -3,7 +3,7 @@ Programmierung eines pH-Messgerätes - Speicherung der Werte auf einem lokalen S
 
 Das Projekt ist in 3 Arbeitspakete unterteilt:
 
-    Automasierung der Messung
+    Automatisierung der Messung
     Implementierung weiterer Features (Speichermodul, Temperatursensor, Echtzeituhr, ...); Steuerung über den PC/Laptop
     Autark steuerbares Messgerät mit Bedienmöglichkeit über das Touch Panel
 
